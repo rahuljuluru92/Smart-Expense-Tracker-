@@ -1,0 +1,39 @@
+{
+  "name": "controlspending-expense-tracker",
+  "version": "1.0.0",
+  "description": "Contextual AI Expense Tracker with smart features and gamification",
+  "main": "index.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:client\" \"npm run dev:server\" \"npm run dev:ai\"",
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "cd server && npm run dev",
+    "dev:ai": "cd ai-service && python main.py",
+    "build": "npm run build:client && npm run build:server",
+    "build:client": "cd client && npm run build",
+    "build:server": "cd server && npm run build",
+    "test": "npm run test:client && npm run test:server",
+    "test:client": "cd client && npm run test",
+    "test:server": "cd server && npm run test",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "db:push": "cd server && npx prisma db push",
+    "db:generate": "cd server && npx prisma generate",
+    "db:studio": "cd server && npx prisma studio",
+    "docker:build": "docker-compose build",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down"
+  },
+  "keywords": [
+    "expense-tracker",
+    "ai",
+    "fintech",
+    "react",
+    "nextjs",
+    "typescript",
+    "nodejs"
+  ],
+  "author": "rahul",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
