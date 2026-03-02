@@ -1,0 +1,180 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  password    String
+  name        String
+  avatar      String?
+  preferences Json?    @default("{}")
+  level       Int      @default(1)
+  experience  Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  expenses            Expense[]
+  categories          Category[]
+  budgets             Budget[]
+  notifications       Notification[]
+  locationInsights    LocationInsight[]
+  spendingPredictions SpendingPrediction[]
+  aiJobs              AIJob[]
+  savingsGoals        SavingsGoal[]
+
+  @@map("users")
+}
+
+model Expense {
+  id               String   @id @default(cuid())
+  userId           String
+  amount           Float
+  currency         String   @default("USD")
+  description      String
+  categoryId       String
+  date             DateTime
+  location         Json?
+  tags             Json?    @default("[]")
+  isRecurring      Boolean  @default(false)
+  recurringPattern Json?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id])
+
+  @@index([userId, date])        // analytics time-range queries
+  @@index([userId, categoryId])  // category breakdown queries
+  @@index([userId, createdAt])   // recent transactions (DESC)
+  @@map("expenses")
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  icon      String?
+  color     String?
+  budget    Float    @default(0)
+  spent     Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expenses Expense[]
+
+  @@index([userId])
+  @@map("categories")
+}
+
+model Budget {
+  id        String   @id @default(cuid())
+  userId    String
+  amount    Float
+  spent     Float    @default(0)
+  period    String   @default("monthly")
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isActive])
+  @@map("budgets")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  data      Json?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])   // unread count queries
+  @@index([userId, createdAt])
+  @@map("notifications")
+}
+
+model LocationInsight {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  address     String?
+  latitude    Float?
+  longitude   Float?
+  totalSpent  Float    @default(0)
+  visitCount  Int      @default(0)
+  lastVisited DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, totalSpent])
+  @@map("location_insights")
+}
+
+model SpendingPrediction {
+  id          String   @id @default(cuid())
+  userId      String
+  date        DateTime
+  amount      Float
+  confidence  Float    @default(0.5)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])   // future-date lookups
+  @@map("spending_predictions")
+}
+
+model AIJob {
+  id        String   @id @default(cuid())
+  userId    String
+  status    String   @default("processing")  // processing | done | failed
+  imagePath String
+  result    Json?
+  error     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@map("ai_jobs")
+}
+
+model SavingsGoal {
+  id           String    @id @default(cuid())
+  userId       String
+  name         String
+  type         String    // fd, stocks, real_estate, emergency_fund, crypto, travel, other
+  targetAmount Float
+  savedAmount  Float     @default(0)
+  deadline     DateTime?
+  notes        String?
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("savings_goals")
+}
