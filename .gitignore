@@ -93,3 +93,5 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 project-structure.md
 server.js
+init_commits.sh
+continue_commits.sh
