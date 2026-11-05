@@ -126,17 +126,19 @@ def process_receipt_task(self, job_id: str, image_path: str):
         })
     except Exception as exc:
         if self.request.retries < self.max_retries:
+            # Keep the image on disk: the retry needs it
             raise self.retry(exc=exc, countdown=5)
 
         redis_client.hset(f"job:{job_id}", mapping={
             "status": "failed",
-            "error": str(exc),
+            "error": "Receipt could not be processed",
         })
-    finally:
-        try:
-            Path(image_path).unlink(missing_ok=True)
-        except Exception:
-            pass
+
+    # Reached only on success or final failure (retry() raises above)
+    try:
+        Path(image_path).unlink(missing_ok=True)
+    except Exception:
+        pass
 
     redis_client.expire(f"job:{job_id}", 3600)
     return {"job_id": job_id, "status": "done"}

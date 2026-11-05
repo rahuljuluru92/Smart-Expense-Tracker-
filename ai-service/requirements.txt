@@ -1,30 +1,22 @@
 # FastAPI and web framework
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-dotenv==1.0.0
-pydantic==2.5.0
-pydantic-settings==2.1.0
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+python-dotenv==1.0.1
+pydantic==2.10.4
+
+# Auth: verifies JWTs issued by the Node API (shared JWT_SECRET)
+PyJWT==2.10.1
 
 # Basic data processing
-numpy==1.24.3
-pandas==2.0.3
-
-# HTTP client
-httpx==0.25.2
-requests==2.31.0
-
-# Development and Testing
-pytest==7.4.3
-pytest-asyncio==0.21.1
+numpy==1.26.4
 
 # Receipt OCR pipeline
-openai==1.6.1
-pytesseract==0.3.10
-opencv-python==4.8.1.78
-Pillow==10.1.0
+openai==1.58.1
+pytesseract==0.3.13
+opencv-python-headless==4.10.0.84
+Pillow==11.0.0
 
 # Async background workers
-celery[redis]==5.3.4
+celery[redis]==5.4.0
+redis==5.2.1

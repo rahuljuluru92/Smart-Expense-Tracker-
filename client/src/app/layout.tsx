@@ -1,4 +1,4 @@
-import type { Metadata } from 'next'
+import type { Metadata, Viewport } from 'next'
 import { Inter } from 'next/font/google'
 import './globals.css'
 import { Providers } from '@/components/providers'
@@ -6,12 +6,16 @@ import { Toaster } from 'react-hot-toast'
 
 const inter = Inter({ subsets: ['latin'] })
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+}
+
 export const metadata: Metadata = {
   title: 'ControlSpending - Smart Expense Tracker',
   description: 'Track your expenses with AI-powered insights, location-based alerts, and gamified savings goals.',
   keywords: ['expense tracker', 'budget', 'finance', 'AI', 'spending', 'savings'],
   authors: [{ name: 'ControlSpending Team' }],
-  viewport: 'width=device-width, initial-scale=1',
   robots: 'index, follow',
   openGraph: {
     title: 'ControlSpending - Smart Expense Tracker',

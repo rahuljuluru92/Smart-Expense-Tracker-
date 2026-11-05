@@ -20,6 +20,13 @@ api.interceptors.request.use((config) => {
   return config
 })
 
+// The AI service verifies the same JWT the API issues
+aiApi.interceptors.request.use((config) => {
+  const token = getToken()
+  if (token) config.headers.Authorization = `Bearer ${token}`
+  return config
+})
+
 api.interceptors.response.use(
   (response) => response,
   (error) => {

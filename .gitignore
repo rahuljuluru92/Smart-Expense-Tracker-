@@ -95,3 +95,7 @@ project-structure.md
 server.js
 init_commits.sh
 continue_commits.sh
+
+# AI service test artefacts
+ai-service/tests/.uploads/
+.venv/
