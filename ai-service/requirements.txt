@@ -19,4 +19,4 @@ Pillow==11.0.0
 
 # Async background workers
 celery[redis]==5.4.0
-redis==5.2.1
+redis==8.1.0
