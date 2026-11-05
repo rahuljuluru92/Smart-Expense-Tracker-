@@ -33,7 +33,7 @@
     "react-chartjs-2": "^5.2.0",
     "react-dom": "^18.2.0",
     "react-dropzone": "^14.2.0",
-    "react-hook-form": "^7.47.0",
+    "react-hook-form": "^7.91.0",
     "react-hot-toast": "^2.4.0",
     "react-query": "^3.39.0",
     "recharts": "^2.8.0",
