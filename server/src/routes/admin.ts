@@ -1,13 +1,14 @@
 import express from 'express'
 import { redisClient } from '../middleware/cache'
 import { logger } from '../utils/logger'
+import { protect, authorize } from '../middleware/auth'
 
 const router = express.Router()
 
 // @desc    System health metrics for the System Health dashboard widget
 // @route   GET /api/admin/metrics
-// @access  Public (no auth — metrics are non-sensitive aggregate counts)
-router.get('/metrics', async (req, res) => {
+// @access  Private (admin role)
+router.get('/metrics', protect, authorize('admin'), async (req, res) => {
   try {
     const [hits, misses, queueLen] = await Promise.all([
       redisClient.get('metrics:cache_hits').catch(() => '0'),

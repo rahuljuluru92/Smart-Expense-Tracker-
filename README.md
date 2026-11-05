@@ -65,15 +65,31 @@ cd ../server && npm install
 cd ../ai-service && pip install -r requirements.txt
 ```
 ### Step 2: Environment Setup
+
+Copy `server/.env.example` to `server/.env` and fill it in. The API **refuses to start** if a required value is missing.
+
 ```bash
-# Create a .env file in the root directory:
-DATABASE_URL="postgresql://username:password@localhost:5432/expense_tracker"
-JWT_SECRET="your-super-secret-key"
-OPENAI_API_KEY="your-api-key"
-NEXT_PUBLIC_API_URL="http://localhost:3001"
+# Generate a strong secret (min 32 chars). The API and AI service MUST share it.
+openssl rand -base64 48
+
+# server/.env
+DATABASE_URL="postgresql://expense_user:change-me@localhost:5433/expense_tracker"
+JWT_SECRET="<generated secret>"
+CLIENT_URL="http://localhost:3000"
+
+# ai-service/.env
+JWT_SECRET="<same generated secret>"
+NVIDIA_API_KEY="your-api-key"
+CORS_ORIGINS="http://localhost:3000"
+
+# client/.env.local
+NEXT_PUBLIC_API_URL="http://localhost:3001/api"
 NEXT_PUBLIC_AI_SERVICE_URL="http://localhost:8000"
 ```
-### Step 3: Step 3: Run the Application
+
+For Docker Compose, export `JWT_SECRET` (and optionally `NVIDIA_API_KEY`, `CLIENT_URL`) in your shell or a root `.env` file.
+
+### Step 3: Run the Application
 ```bash 
 #Option A: Using Docker (Recommended)
 docker-compose up -d
@@ -92,6 +108,30 @@ npm run dev
 cd ai-service
 python -m uvicorn main:app --reload
 ```
+
+## 🚀 Production Deployment Checklist
+
+| Setting | Where | Notes |
+|---|---|---|
+| `JWT_SECRET` | API + AI service | Required, ≥ 32 chars, identical in both services. |
+| `CLIENT_URL` | API | Your production frontend URL. **localhost is not allowed in production.** |
+| `CORS_PREVIEW_ORIGIN_REGEX` | API | Optional — only *your* Vercel preview URLs, e.g. `^https://smart-expense-tracker-[a-z0-9-]+-yourteam\.vercel\.app$`. |
+| `CORS_ORIGINS` | AI service | Comma-separated frontend origins. |
+| `TRUST_PROXY` | API | `1` behind Vercel/Railway/nginx (default), `0` if hit directly. |
+
+After pulling these changes, apply the schema change (adds `users.role`):
+
+```bash
+cd server && npx prisma db push
+```
+
+Promote an admin (required for `GET /api/admin/metrics`):
+
+```sql
+UPDATE users SET role = 'admin' WHERE email = 'you@example.com';
+```
+
+Health endpoints: `GET /health` (liveness) and `GET /ready` (checks the database and Redis).
 
 ## 📘 API Documentation
 

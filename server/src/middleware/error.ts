@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import { Prisma } from '@prisma/client'
 import { logger } from '../utils/logger'
 
 export interface AppError extends Error {
@@ -10,72 +11,58 @@ export const errorHandler = (
   err: AppError,
   req: Request,
   res: Response,
-  next: NextFunction
+  // Express identifies error handlers by their 4-argument signature
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _next: NextFunction
 ) => {
-  let error = { ...err }
-  error.message = err.message
+  let statusCode = err.statusCode || 500
+  let message = err.isOperational ? err.message : 'Server Error'
 
-  // Log error
-  logger.error({
-    message: err.message,
-    stack: err.stack,
-    url: req.url,
-    method: req.method,
-    ip: req.ip,
-    userAgent: req.get('User-Agent')
-  })
-
-  // Mongoose bad ObjectId
-  if (err.name === 'CastError') {
-    const message = 'Resource not found'
-    error = { message, statusCode: 404 } as AppError
-  }
-
-  // Mongoose duplicate key
-  if (err.name === 'MongoError' && (err as any).code === 11000) {
-    const message = 'Duplicate field value entered'
-    error = { message, statusCode: 400 } as AppError
-  }
-
-  // Mongoose validation error
-  if (err.name === 'ValidationError') {
-    const message = Object.values((err as any).errors).map((val: any) => val.message).join(', ')
-    error = { message, statusCode: 400 } as AppError
-  }
-
-  // JWT errors
   if (err.name === 'JsonWebTokenError') {
-    const message = 'Invalid token'
-    error = { message, statusCode: 401 } as AppError
-  }
-
-  if (err.name === 'TokenExpiredError') {
-    const message = 'Token expired'
-    error = { message, statusCode: 401 } as AppError
-  }
-
-  // Prisma errors
-  if (err.name === 'PrismaClientKnownRequestError') {
-    const prismaError = err as any
-    switch (prismaError.code) {
+    statusCode = 401
+    message = 'Invalid token'
+  } else if (err.name === 'TokenExpiredError') {
+    statusCode = 401
+    message = 'Token expired'
+  } else if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    switch (err.code) {
       case 'P2002':
-        error = { message: 'Unique constraint violation', statusCode: 400 } as AppError
+        statusCode = 409
+        message = 'Resource already exists'
         break
       case 'P2025':
-        error = { message: 'Record not found', statusCode: 404 } as AppError
+        statusCode = 404
+        message = 'Record not found'
         break
       case 'P2003':
-        error = { message: 'Foreign key constraint violation', statusCode: 400 } as AppError
+        statusCode = 400
+        message = 'Related record not found'
         break
       default:
-        error = { message: 'Database error', statusCode: 500 } as AppError
+        statusCode = 500
+        message = 'Database error'
     }
+  } else if (err instanceof SyntaxError && 'body' in err) {
+    // Malformed JSON body
+    statusCode = 400
+    message = 'Invalid JSON payload'
   }
 
-  res.status(error.statusCode || 500).json({
+  const logPayload = {
+    message: err.message,
+    statusCode,
+    url: req.originalUrl,
+    method: req.method,
+    ip: req.ip,
+    ...(statusCode >= 500 && { stack: err.stack }),
+  }
+  if (statusCode >= 500) logger.error(logPayload)
+  else logger.warn(logPayload)
+
+  res.status(statusCode).json({
     success: false,
-    error: error.message || 'Server Error',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
+    error: message,
+    ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   })
 }
 

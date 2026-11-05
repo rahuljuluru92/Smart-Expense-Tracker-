@@ -31,12 +31,5 @@ if (process.env.NODE_ENV === 'development') {
   })
 }
 
-// Handle connection errors
-// PrismaClient does not support 'error' event for $on, so this block is removed.
-
-// Graceful shutdown
-process.on('beforeExit', async () => {
-  await prisma.$disconnect()
-})
 
 export default prisma

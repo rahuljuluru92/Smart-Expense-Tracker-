@@ -1,5 +1,7 @@
+import io
 import os
 import uuid
+import logging
 import json
 import numpy as np
 from datetime import datetime, timedelta
@@ -9,17 +11,36 @@ from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+import jwt
 import redis
 
 load_dotenv()
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(name)s %(message)s")
+logger = logging.getLogger("ai-service")
 
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "/tmp/uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+
+# Same secret the Node API signs tokens with; required so only logged-in users
+# can spend LLM credits or read receipt results.
+JWT_SECRET = os.getenv("JWT_SECRET", "")
+if len(JWT_SECRET) < 32:
+    raise RuntimeError("JWT_SECRET must be set (at least 32 characters) and match the API server")
+
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(5 * 1024 * 1024)))
+JOB_TTL_SECONDS = 3600
+
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if o.strip()
+]
 
 redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
@@ -31,13 +52,27 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:3001"],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 security = HTTPBearer()
+
+
+def current_user_id(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """Verify the API-issued JWT and return the user id it was issued for."""
+    try:
+        payload = jwt.decode(credentials.credentials, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_id = payload.get("userId")
+    if not isinstance(user_id, str) or not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user_id
 
 CATEGORIES = [
     "Food & Dining", "Transportation", "Entertainment", "Healthcare",
@@ -48,8 +83,8 @@ CATEGORIES = [
 # ── Pydantic models ──────────────────────────────────────────────────────────
 
 class ExpenseAnalysisRequest(BaseModel):
-    description: str
-    amount: float
+    description: str = Field(min_length=1, max_length=500)
+    amount: float = Field(ge=0, le=1e9)
     category: Optional[str] = None
     location: Optional[Dict[str, Any]] = None
     date: Optional[str] = None
@@ -63,8 +98,8 @@ class ExpenseAnalysisResponse(BaseModel):
 
 class SpendingPredictionRequest(BaseModel):
     user_id: str
-    historical_data: List[Dict[str, Any]]
-    prediction_days: int = 30
+    historical_data: List[Dict[str, Any]] = Field(max_length=5000)
+    prediction_days: int = Field(default=30, ge=1, le=365)
 
 class SpendingPredictionResponse(BaseModel):
     predictions: List[Dict[str, Any]]
@@ -189,34 +224,32 @@ def _ocr_pipeline(image_path: str) -> str:
 async def _process_receipt_job(job_id: str, image_path: str):
     """Async background task: OCR → LLM → update Redis job hash."""
     try:
-        print(f"[JOB {job_id[:8]}] Starting OCR on {image_path}", flush=True)
+        logger.info("job %s: starting OCR", job_id[:8])
         import asyncio
         loop = asyncio.get_event_loop()
         # OCR is CPU-bound — run in thread pool so we don't block the event loop
         ocr_text = await loop.run_in_executor(None, _ocr_pipeline, image_path)
-        print(f"[JOB {job_id[:8]}] OCR done, chars={len(ocr_text)}, preview={ocr_text[:100]!r}", flush=True)
+        logger.info("job %s: OCR done (%d chars)", job_id[:8], len(ocr_text))
 
         result = await _gpt_classify_receipt(ocr_text)
-        print(f"[JOB {job_id[:8]}] LLM done: {result}", flush=True)
+        logger.info("job %s: LLM classification done", job_id[:8])
 
         redis_client.hset(f"job:{job_id}", mapping={
             "status": "done",
             "result": json.dumps(result),
         })
     except Exception as exc:
-        import traceback
-        print(f"[JOB {job_id[:8]}] FAILED: {exc}", flush=True)
-        traceback.print_exc()
+        logger.exception("job %s: failed", job_id[:8])
         redis_client.hset(f"job:{job_id}", mapping={
             "status": "failed",
-            "error": str(exc),
+            "error": "Receipt could not be processed",
         })
     finally:
         try:
             Path(image_path).unlink(missing_ok=True)
         except Exception:
             pass
-        redis_client.expire(f"job:{job_id}", 3600)
+        redis_client.expire(f"job:{job_id}", JOB_TTL_SECONDS)
 
 
 def _predict_spending(historical_data: List[Dict], days: int) -> SpendingPredictionResponse:
@@ -278,7 +311,7 @@ async def get_categories():
 @app.post("/analyze-expense", response_model=ExpenseAnalysisResponse)
 async def analyze_expense_endpoint(
     request: ExpenseAnalysisRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    user_id: str = Depends(current_user_id)
 ):
     """Classify expense description via GPT-4o-mini."""
     if not NVIDIA_API_KEY:
@@ -292,15 +325,16 @@ async def analyze_expense_endpoint(
             recommendations=data.get("recommendations", []),
             risk_level=data.get("risk_level", "low"),
         )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("analyze-expense failed")
+        raise HTTPException(status_code=502, detail="AI analysis failed")
 
 
 @app.post("/analyze-receipt", status_code=202)
 async def analyze_receipt_endpoint(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    user_id: str = Depends(current_user_id)
 ):
     """
     Accept receipt image, queue OCR + GPT-4o-mini job.
@@ -309,21 +343,34 @@ async def analyze_receipt_endpoint(
     if not NVIDIA_API_KEY:
         raise HTTPException(status_code=503, detail="NVIDIA_API_KEY not configured")
 
-    allowed = {"image/jpeg", "image/png", "image/webp", "image/tiff"}
-    if file.content_type not in allowed:
+    # Read at most MAX_UPLOAD_BYTES + 1 so oversized uploads are rejected without buffering them
+    contents = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(contents) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Image too large (max {MAX_UPLOAD_BYTES // (1024 * 1024)} MB)")
+
+    # Trust the bytes, not the client-supplied content type or filename
+    from PIL import Image, UnidentifiedImageError
+    Image.MAX_IMAGE_PIXELS = 40_000_000  # decompression-bomb guard
+    try:
+        with Image.open(io.BytesIO(contents)) as img:
+            image_format = img.format
+            img.verify()
+    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, SyntaxError):
+        raise HTTPException(status_code=400, detail="File is not a valid image")
+
+    allowed_formats = {"JPEG": ".jpg", "PNG": ".png", "WEBP": ".webp", "TIFF": ".tiff"}
+    if image_format not in allowed_formats:
         raise HTTPException(status_code=400, detail="Unsupported image type")
 
     job_id = str(uuid.uuid4())
-    suffix = Path(file.filename or "upload.jpg").suffix or ".jpg"
-    image_path = str(UPLOAD_DIR / f"{job_id}{suffix}")
+    image_path = str(UPLOAD_DIR / f"{job_id}{allowed_formats[image_format]}")
 
-    contents = await file.read()
     with open(image_path, "wb") as f:
         f.write(contents)
 
-    # Store initial job state in Redis (TTL 1h)
-    redis_client.hset(f"job:{job_id}", mapping={"status": "processing"})
-    redis_client.expire(f"job:{job_id}", 3600)
+    # Store initial job state, owned by the uploading user
+    redis_client.hset(f"job:{job_id}", mapping={"status": "processing", "user_id": user_id})
+    redis_client.expire(f"job:{job_id}", JOB_TTL_SECONDS)
 
     # Enqueue to background — only pass job_id + path (never raw bytes)
     background_tasks.add_task(_process_receipt_job, job_id, image_path)
@@ -334,11 +381,12 @@ async def analyze_receipt_endpoint(
 @app.get("/jobs/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    user_id: str = Depends(current_user_id)
 ):
     """Poll receipt analysis job status."""
     data = redis_client.hgetall(f"job:{job_id}")
-    if not data:
+    # Return 404 (not 403) for other users' jobs so job ids can't be probed
+    if not data or data.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     result = None
@@ -359,13 +407,14 @@ async def get_job_status(
 @app.post("/predict-spending", response_model=SpendingPredictionResponse)
 async def predict_spending_endpoint(
     request: SpendingPredictionRequest,
-    credentials: HTTPAuthorizationCredentials = Depends(security)
+    user_id: str = Depends(current_user_id)
 ):
     """Rolling-mean trend prediction from historical expense data."""
     try:
         return _predict_spending(request.historical_data, request.prediction_days)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("predict-spending failed")
+        raise HTTPException(status_code=500, detail="Prediction failed")
 
 
 if __name__ == "__main__":

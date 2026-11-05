@@ -193,10 +193,13 @@ router.post('/', protect, [
       })
     }
 
-    // Create expense
-    const expense = await prisma.expense.create({
+    const parsedAmount = parseFloat(amount)
+
+    // Create the expense and update the category total atomically
+    const expense = await prisma.$transaction(async (tx) => {
+      const created = await tx.expense.create({
       data: {
-        amount: parseFloat(amount),
+        amount: parsedAmount,
         currency,
         description,
         categoryId,
@@ -210,16 +213,14 @@ router.post('/', protect, [
       include: {
         category: true
       }
-    })
+      })
 
-    // Update category spent amount
-    await prisma.category.update({
-      where: { id: categoryId },
-      data: {
-        spent: {
-          increment: parseFloat(amount)
-        }
-      }
+      await tx.category.update({
+        where: { id: categoryId },
+        data: { spent: { increment: parsedAmount } }
+      })
+
+      return created
     })
 
     logger.info(`New expense created: ${expense.id} by user ${req.user.id}`)
@@ -297,71 +298,52 @@ router.put('/:id', protect, [
       categoryId = cat.id
     }
 
-    // If category is being changed, update spent amounts
-    if (categoryId && categoryId !== existingExpense.categoryId) {
-      // Verify new category exists and belongs to user
-      const newCategory = await prisma.category.findFirst({
-        where: {
-          id: categoryId,
-          userId: req.user.id
-        }
-      })
+    // Explicit undefined checks so legitimate falsy values (amount 0, isRecurring false) are applied
+    const newAmount = amount !== undefined ? parseFloat(amount) : existingExpense.amount
+    const categoryChanged = categoryId !== undefined && categoryId !== existingExpense.categoryId
 
+    if (categoryChanged) {
+      const newCategory = await prisma.category.findFirst({
+        where: { id: categoryId, userId: req.user.id }
+      })
       if (!newCategory) {
-        return res.status(400).json({
-          success: false,
-          message: 'Category not found'
+        return res.status(400).json({ success: false, message: 'Category not found' })
+      }
+    }
+
+    // Keep category totals and the expense row consistent: all writes succeed or none do
+    const updatedExpense = await prisma.$transaction(async (tx) => {
+      if (categoryChanged) {
+        await tx.category.update({
+          where: { id: existingExpense.categoryId },
+          data: { spent: { decrement: existingExpense.amount } }
+        })
+        await tx.category.update({
+          where: { id: categoryId },
+          data: { spent: { increment: newAmount } }
+        })
+      } else if (newAmount !== existingExpense.amount) {
+        await tx.category.update({
+          where: { id: existingExpense.categoryId },
+          data: { spent: { increment: newAmount - existingExpense.amount } }
         })
       }
 
-      // Update old category spent amount
-      await prisma.category.update({
-        where: { id: existingExpense.categoryId },
+      return tx.expense.update({
+        where: { id: existingExpense.id },
         data: {
-          spent: {
-            decrement: existingExpense.amount
-          }
-        }
+          ...(amount !== undefined && { amount: newAmount }),
+          ...(currency !== undefined && { currency }),
+          ...(description !== undefined && { description }),
+          ...(categoryChanged && { categoryId }),
+          ...(date !== undefined && { date: new Date(date) }),
+          ...(location !== undefined && { location }),
+          ...(tags !== undefined && { tags }),
+          ...(isRecurring !== undefined && { isRecurring }),
+          ...(recurringPattern !== undefined && { recurringPattern })
+        },
+        include: { category: true }
       })
-
-      // Update new category spent amount
-      await prisma.category.update({
-        where: { id: categoryId },
-        data: {
-          spent: {
-            increment: amount || existingExpense.amount
-          }
-        }
-      })
-    } else if (amount && amount !== existingExpense.amount) {
-      // Update category spent amount if only amount changed
-      await prisma.category.update({
-        where: { id: existingExpense.categoryId },
-        data: {
-          spent: {
-            increment: parseFloat(amount) - existingExpense.amount
-          }
-        }
-      })
-    }
-
-    // Update expense
-    const updatedExpense = await prisma.expense.update({
-      where: { id: req.params.id },
-      data: {
-        ...(amount && { amount: parseFloat(amount) }),
-        ...(currency && { currency }),
-        ...(description && { description }),
-        ...(categoryId && { categoryId }),
-        ...(date && { date: new Date(date) }),
-        ...(location && { location }),
-        ...(tags && { tags }),
-        ...(isRecurring !== undefined && { isRecurring }),
-        ...(recurringPattern && { recurringPattern })
-      },
-      include: {
-        category: true
-      }
     })
 
     logger.info(`Expense updated: ${updatedExpense.id} by user ${req.user.id}`)
@@ -392,20 +374,13 @@ router.delete('/:id', protect, async (req: any, res: Response, next: NextFunctio
       return next(createError('Expense not found', 404))
     }
 
-    // Update category spent amount
-    await prisma.category.update({
-      where: { id: expense.categoryId },
-      data: {
-        spent: {
-          decrement: expense.amount
-        }
-      }
-    })
-
-    // Delete expense
-    await prisma.expense.delete({
-      where: { id: req.params.id }
-    })
+    await prisma.$transaction([
+      prisma.category.update({
+        where: { id: expense.categoryId },
+        data: { spent: { decrement: expense.amount } }
+      }),
+      prisma.expense.delete({ where: { id: expense.id } })
+    ])
 
     logger.info(`Expense deleted: ${req.params.id} by user ${req.user.id}`)
     await invalidateUserCache(req.user.id)
