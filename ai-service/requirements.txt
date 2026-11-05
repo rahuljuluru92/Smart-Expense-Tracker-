@@ -9,7 +9,7 @@ pydantic==2.10.4
 PyJWT==2.10.1
 
 # Basic data processing
-numpy==1.26.4
+numpy==2.5.4
 
 # Receipt OCR pipeline
 openai==1.58.1
